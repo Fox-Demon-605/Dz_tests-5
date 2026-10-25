@@ -1,0 +1,54 @@
+name: Deploy Docker
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: tag/version to deploy
+        required: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          audience: sts.amazonaws.com
+          aws-region: us-east-1
+          role-to-assume: arn:aws:iam::886148526908:role/CloudformationBuild
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --name eks-prod-swagger-oss-cluster-tf \
+            --region us-east-1 \
+            --role-arn arn:aws:iam::886148526908:role/CloudformationBuild
+
+      - name: Deploy to Kubernetes
+        env:
+          BUGSNAG_API_KEY: ${{ secrets.BUGSNAG_API_KEY }}
+        run: |
+          IMAGE="swaggerapi/petstore3:${{ github.event.inputs.tag }}-telemetry"
+
+          echo "Deploying image: $IMAGE"
+
+          kubectl set image daemonset/swagger-petstore-3 \
+            swagger-petstore-3=$IMAGE \
+            -n swagger-oss
+
+          kubectl set env daemonset/swagger-petstore-3 \
+            -c swagger-petstore-3 \
+            -n swagger-oss \
+            BUGSNAG_API_KEY="$BUGSNAG_API_KEY" \
+            notifierClass=io.swagger.petstore.notification.BugSnagNotifier
+
+          kubectl rollout status daemonset/swagger-petstore-3 -n swagger-oss
